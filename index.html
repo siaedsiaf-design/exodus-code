@@ -467,7 +467,7 @@ window.addEventListener('pointermove', e=>{
 });
 
 // ---- Live Discord Data Fetching from Node.js Server ----
-const API_BASE = "http://localhost:8080";
+const API_BASE = "https://exodus-code-theta.vercel.app";
 
 async function fetchDiscordWidget(){
   const el = {
@@ -482,13 +482,34 @@ async function fetchDiscordWidget(){
     const res = await fetch(`${API_BASE}/api/stats`);
     if (!res.ok) throw new Error('API failed');
     const data = await res.json();
+    
+    // لو السيرفر رجع 0 أو مفيش بيانات، هنحاول نجيبها مباشرة
+    if (data.online === 0 || data.online === undefined) throw new Error('Zero data');
+
     el.online.textContent = data.online ?? '—';
     el.total.textContent = data.total ?? '—';
     el.voice.textContent = data.voice ?? '—';
     el.updated.textContent = "Last sync: " + new Date().toLocaleTimeString();
   } catch (err) {
-    el.updated.textContent = "Last sync: backend offline";
-    console.warn('Stats fetch failed:', err);
+    // الخطة البديلة: جلب البيانات مباشرة من ديسكورد
+    try {
+        const serverId = "1565012659751886929"; // ضع آي دي السيرفر بتاعك هنا
+        const discordRes = await fetch(`https://discord.com/api/guilds/${serverId}/widget.json`);
+        const d = await discordRes.json();
+        
+        let voice = 0;
+        if (d.channels) {
+            voice = d.channels.filter(c => c.members && c.members.length > 0).length;
+        }
+        
+        el.online.textContent = d.presence_count || '0';
+        el.total.textContent = d.presence_count || '0';
+        el.voice.textContent = voice;
+        el.updated.textContent = "Last sync: Live (Direct)";
+    } catch (fallbackErr) {
+        el.updated.textContent = "Last sync: backend offline";
+        console.warn('Fallback fetch failed:', fallbackErr);
+    }
   }
 
   try {
