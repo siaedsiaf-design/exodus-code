@@ -1,8 +1,3 @@
-// ExodusCode API server
-// ---------------------------------------------------------------------
-// Thin Express proxy between the landing page and Discord. The bot token
-// lives only in this process (via .env) and is never sent to the browser.
-
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -26,15 +21,9 @@ if (!GUILD_ID) {
 }
 
 const DISCORD_API = 'https://discord.com/api/v10';
-
 const app = express();
 app.use(cors({ origin: CORS_ORIGIN }));
 
-// --- tiny in-process cache -------------------------------------------
-// Discord rate-limits aggressively. Cache each endpoint's result for a
-// short window so a burst of visitors doesn't turn into a burst of calls
-// against Discord. If a refresh fails, we keep serving the last good
-// value instead of breaking the widget on the page.
 function makeCache(ttlMs) {
   return { value: null, fetchedAt: 0, ttlMs };
 }
@@ -45,54 +34,38 @@ function isFresh(cache) {
 const statsCache = makeCache(30_000);
 const feedCache = makeCache(30_000);
 
-// --- GET /api/ping -----------------------------------------------------
 app.get('/api/ping', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-// --- GET /api/stats ------------------------------------------------------
+// جلب الإحصائيات باستخدام البوت مباشرة (بدون الحاجة لتفعيل Widget)
 app.get('/api/stats', async (req, res) => {
   if (!isFresh(statsCache)) {
     try {
       const { data } = await axios.get(
-        `${DISCORD_API}/guilds/${GUILD_ID}/widget.json`
+        `${DISCORD_API}/guilds/${GUILD_ID}?with_counts=true`,
+        { headers: { Authorization: `Bot ${BOT_TOKEN}` } }
       );
 
-      // The widget only exposes online presence, not true membership —
-      // Discord's public widget API has no "total members" field. `total`
-      // is set equal to `online` here to match the requested shape; for a
-      // real total, call GET /guilds/{id}?with_counts=true with the bot
-      // token (same auth pattern as /api/feed below) and read
-      // `approximate_member_count` from the response.
-      const online = data.presence_count ?? 0;
-      const voiceChannelsActive = (data.channels || []).filter(
-        (ch) => Array.isArray(ch.members) && ch.members.length > 0
-      ).length;
+      const online = data.approximate_presence_count ?? 0;
+      const total = data.approximate_member_count ?? 0;
+      const voice = 0; // الحصول على عدد الرومات الصوتية يحتاج قراءة حالة الأعضاء (Presence Intent)
 
-      statsCache.value = { online, total: online, voice: voiceChannelsActive };
+      statsCache.value = { online, total, voice };
       statsCache.fetchedAt = Date.now();
     } catch (err) {
       console.error('[/api/stats]', err.response?.status, err.message);
       if (statsCache.value === null) {
-        const status = err.response?.status === 403 || err.response?.status === 404
-          ? 'widget_disabled'
-          : 'stats_unavailable';
         return res.status(502).json({
-          error: status,
-          detail:
-            status === 'widget_disabled'
-              ? 'Discord widget is not enabled for this guild. Enable it in Server Settings -> Widget.'
-              : err.message,
+          error: 'stats_unavailable',
+          detail: err.message,
         });
       }
-      // fall through and serve the stale cached value below
     }
   }
-
   res.json(statsCache.value);
 });
 
-// --- GET /api/feed -------------------------------------------------------
 app.get('/api/feed', async (req, res) => {
   if (!CHANNEL_ID) {
     return res.status(500).json({ error: 'channel_not_configured' });
